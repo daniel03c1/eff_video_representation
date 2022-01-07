@@ -1,4 +1,4 @@
-# Neural Residual Flow Fields for Efficient Video Representations (CVPR 2022 submission)
+# Neural Residual Flow Fields for Efficient Video Representations
 
 ### 1. Download MPI sintel dataset 
 Download MPI sintel dataset from [here](http://sintel.is.tue.mpg.de/)
