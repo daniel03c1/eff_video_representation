@@ -24,3 +24,6 @@ Training baseline (SIREN)
 python train_video.py --data-dir {sintel dataset training directory} --video-name alley_1 --hidden-features 256 --num-frames 28 --lr 0.001 --training-step 30000 --tag baseline_siren_hf256
 ```
 
+### 4. Examples
+https://user-images.githubusercontent.com/48237485/148535439-0f24fadd-07a9-4a99-af28-59c3b67ee2c1.mp4
+
