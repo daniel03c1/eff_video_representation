@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 def _binarize(y_data, threshold):
     """
     args:
@@ -13,6 +14,7 @@ def _binarize(y_data, threshold):
     y_data[y_data < threshold] = 0.0
     y_data[y_data >= threshold] = 1.0
     return y_data
+
 
 class MSE(object):
     def __init__(self, des="Mean Square Error"):
@@ -129,3 +131,4 @@ class SSIM(object):
         if full:
             return ret, cs
         return ret
+
