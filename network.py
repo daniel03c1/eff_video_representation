@@ -40,8 +40,8 @@ class Siren(nn.Module):
         out = self.net(coords)
         if not self.flow:
             return out
-        out_flow = out[:,:2]
-        out_im = torch.tanh(out[:,2:])
+        out_flow = out[..., :2]
+        out_im = torch.tanh(out[..., 2:])
         return out_flow, out_im
 
     def forward_with_activations(self, coords, retain_grad=False):
