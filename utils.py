@@ -10,29 +10,6 @@ import torchvision
 import torchvision.transforms as transforms
 
 
-class InputPadder:
-    """ Pads images such that dimensions are divisible by 8 """
-    def __init__(self, dims, mode='sintel'):
-        self.ht, self.wd = dims[-2:]
-        pad_ht = (((self.ht // 8) + 1) * 8 - self.ht) % 8
-        pad_wd = (((self.wd // 8) + 1) * 8 - self.wd) % 8
-
-        if mode == 'sintel':
-            self._pad = [pad_wd//2, pad_wd - pad_wd//2,
-                         pad_ht//2, pad_ht - pad_ht//2]
-        else:
-            self._pad = [pad_wd//2, pad_wd - pad_wd//2,
-                         0, pad_ht]
-
-    def pad(self, *inputs):
-        return [F.pad(x, self._pad, mode='replicate') for x in inputs]
-
-    def unpad(self,x):
-        ht, wd = x.shape[-2:]
-        c = [self._pad[2], ht-self._pad[3], self._pad[0], wd-self._pad[1]]
-        return x[..., c[0]:c[1], c[2]:c[3]]
-
-
 def load_optical_flow_estimator(checkpoint='GMA/checkpoints/gma-sintel.pth'):
     class Args:
         model = checkpoint
@@ -97,6 +74,29 @@ def extract_flows(frames):
     flows = flows.permute(0, 2, 3, 1) # to (N, H, W, C)
 
     return flows
+
+
+class InputPadder:
+    """ Pads images such that dimensions are divisible by 8 """
+    def __init__(self, dims, mode='sintel'):
+        self.ht, self.wd = dims[-2:]
+        pad_ht = (((self.ht // 8) + 1) * 8 - self.ht) % 8
+        pad_wd = (((self.wd // 8) + 1) * 8 - self.wd) % 8
+
+        if mode == 'sintel':
+            self._pad = [pad_wd//2, pad_wd - pad_wd//2,
+                         pad_ht//2, pad_ht - pad_ht//2]
+        else:
+            self._pad = [pad_wd//2, pad_wd - pad_wd//2,
+                         0, pad_ht]
+
+    def pad(self, *inputs):
+        return [F.pad(x, self._pad, mode='replicate') for x in inputs]
+
+    def unpad(self,x):
+        ht, wd = x.shape[-2:]
+        c = [self._pad[2], ht-self._pad[3], self._pad[0], wd-self._pad[1]]
+        return x[..., c[0]:c[1], c[2]:c[3]]
 
 
 def save_keyframe(keyframe, quality_factor, save_path):
