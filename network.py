@@ -9,8 +9,7 @@ class Siren(nn.Module):
     def __init__(self, in_features,
                  hidden_features, hidden_layers,
                  out_features, outermost_linear=False,
-                 first_omega_0=30, hidden_omega_0=30.,
-                 flow=True):
+                 first_omega_0=30, hidden_omega_0=30.):
         super().__init__()
 
         self.net = []
@@ -37,12 +36,7 @@ class Siren(nn.Module):
         self.flow = flow
 
     def forward(self, coords):
-        out = self.net(coords)
-        if not self.flow:
-            return out
-        out_flow = out[..., :2]
-        out_im = torch.tanh(out[..., 2:])
-        return out_flow, out_im
+        return self.net(coords)
 
     def forward_with_activations(self, coords, retain_grad=False):
         '''Returns not only model output, but also intermediate activations.
