@@ -1,5 +1,11 @@
 # Neural Residual Flow Fields for Efficient Video Representations ([arxiv](https://arxiv.org/abs/2201.04329))
 
+I'm currently aggregating and refactoring multiple versions of code that haven't been committed to this repository.
+With high probability, errors, such as inconsistent results with the paper, might occur.
+I am planning to fix these errors as soon as possible.
+Thank you.
+
+
 ### 1. Download MPI sintel dataset 
 Download MPI sintel dataset from [here](http://sintel.is.tue.mpg.de/)
 
