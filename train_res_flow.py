@@ -109,6 +109,10 @@ if __name__=='__main__':
     print('configs')
     print(str(vars(args)))
 
+    save_path = os.path.join(args.save_path, args.tag)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+
     """ PREPARING A VIDEO """
     target_frames = load_video_from_images(
         args.video_path, args.start_frame, args.n_frames, args.video_scale)
@@ -116,7 +120,8 @@ if __name__=='__main__':
     # keyframe
     kf_idx = get_keyframe_idx(args.keyframe_loc, len(target_frames))
     keyframe, keyframe_size = save_keyframe(
-        target_frames[kf_idx], args.jpeg_quality, '000.jpeg')
+        target_frames[kf_idx], args.jpeg_quality,
+        os.path.join(save_path, 'keyframe.jpeg'))
     keyframe = keyframe.cuda()
     target_frames = target_frames.cuda()
 
@@ -152,10 +157,6 @@ if __name__=='__main__':
     default_perfs = np.array(
         [m(keyframe.unsqueeze(0), target_frames[kf_idx].unsqueeze(0)) / T
          for m in metrics])
-
-    save_path = os.path.join(args.save_path, args.tag)
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
 
     """ START TRAINING """
     with tqdm.tqdm(range(args.epochs)) as loop:
