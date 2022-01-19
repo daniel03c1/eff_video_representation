@@ -71,6 +71,9 @@ def get_keyframe_idx(keyframe_loc: str, n_frames: int):
 def get_target_flows_residuals(frames, keyframe, keyframe_idx, flow_grid):
     def stitch(frames, keyframe_in_front):
         # stitch keyframe onto frames
+        if frames.size(0) == 0:
+            return frames
+
         if keyframe_in_front:
             return torch.cat([keyframe, frames], 0)
         else:

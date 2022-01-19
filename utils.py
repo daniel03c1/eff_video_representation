@@ -64,6 +64,8 @@ def extract_flows(frames):
     extracts backward flows
     I_{t+1}(x, y) = I_t(x+u, y+v)
     '''
+    if frames.size(0) <= 1: # single frame
+        return torch.zeros(0, *frames.shape[-2:], 2).cuda()
     model = load_optical_flow_estimator()
     padder = InputPadder(frames.shape)
 
@@ -71,9 +73,8 @@ def extract_flows(frames):
     image1, image2 = padder.pad(frames[1:], frames[:-1])
     _, flows = model(image1*255., image2*255., iters=12, test_mode=True)
     flows = padder.unpad(flows).detach()
-    flows = flows.permute(0, 2, 3, 1) # to (N, H, W, C)
 
-    return flows
+    return flows.permute(0, 2, 3, 1) # to (N, H, W, C)
 
 
 class InputPadder:
