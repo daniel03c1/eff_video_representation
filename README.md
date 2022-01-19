@@ -1,4 +1,4 @@
-# Neural Residual Flow Fields for Efficient Video Representations
+# Neural Residual Flow Fields for Efficient Video Representations ([arxiv](https://arxiv.org/abs/2201.04329))
 
 ### 1. Download MPI sintel dataset 
 Download MPI sintel dataset from [here](http://sintel.is.tue.mpg.de/)
