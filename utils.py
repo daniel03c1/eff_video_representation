@@ -113,11 +113,11 @@ def save_keyframe(keyframe, quality_factor, save_path):
     keyframe = keyframe.numpy().astype('uint8')
     keyframe = PIL.Image.fromarray(keyframe)
     keyframe.save(save_path, quality=quality_factor, subsampling=0)
-    keyframe_nbyte = os.stat(save_path).st_size
+    keyframe_size = os.stat(save_path).st_size
     keyframe = transforms.functional.to_tensor(PIL.Image.open(save_path))
     os.remove(save_path)
 
-    return keyframe, keyframe_nbyte
+    return keyframe, keyframe_size
 
 
 def show_tensor_to_image(tensor, file_name):
