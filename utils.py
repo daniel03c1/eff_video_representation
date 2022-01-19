@@ -64,6 +64,7 @@ def load_video(data_dir, video_name, T, start_frame, key_frame_quality, tag, use
 
     target_frames = []
     target_flow = []
+
     # frame_0001 is the first frame, so t+1
     for t in range(start_frame, start_frame+T):
         target_frames.append(tf(PIL.Image.open(video_dir+"frame_{:04d}.png".format(t+1))))
@@ -117,9 +118,10 @@ def make_input_grid(T, H, W):
 
 # (x,y)
 def make_flow_grid(H, W):
-    flow_grid = torch.stack(torch.meshgrid(torch.arange(0,H), torch.arange(0,W)), -1).float()
-    flow_grid = torch.stack((flow_grid[:,:,1],flow_grid[:,:,0]),-1)
-    return flow_grid
+    # generates (H, W, 2) shaped tensor
+    flow_grid = torch.stack(torch.meshgrid(torch.arange(0, H),
+                                           torch.arange(0, W)), -1).float()
+    return torch.flip(flow_grid, (-1,)) # from (y, x) to (x, y)
 
 
 def apply_flow(flow_grid, pred_flow, H, W, direction='rl'):
