@@ -1,7 +1,9 @@
 import PIL
-import matplotlib.pyplot as plt
+import cv2
+import glob
 import numpy as np
-import os.path
+import os
+import skvideo.io
 import torch
 import torch.nn.functional as F
 import torchvision
@@ -54,52 +56,68 @@ def load_optical_flow_estimator(checkpoint='GMA/checkpoints/gma-sintel.pth'):
     return model
 
 
-def load_video(data_dir, video_name, T, start_frame, key_frame_quality, tag, use_estimator=False):
-    tf = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((218, 512)), # (1024, 436)
-    ])
-    video_dir = data_dir + "/final/{}/".format(video_name)
-    flow_dir = data_dir + "/flow/{}/".format(video_name)
+def load_video_from_images(image_folder, start_frame=None, n_frames=None,
+                           scale=1., antialias=False):
+    frames = sorted(glob.glob(os.path.join(image_folder, '*.png')))
 
-    target_frames = []
-    target_flow = []
+    if start_frame is None:
+        start_frame = 0
+    if n_frames is None:
+        n_frames = len(frames)
 
-    # frame_0001 is the first frame, so t+1
-    for t in range(start_frame, start_frame+T):
-        target_frames.append(tf(PIL.Image.open(video_dir+"frame_{:04d}.png".format(t+1))))
-    # the last one more frame
-    target_frames.append(tf(PIL.Image.open(video_dir+"frame_{:04d}.png".format(t+2))))
-    target_frames = torch.stack(target_frames, 0)
+    frames = [transforms.functional.to_tensor(PIL.Image.open(f))
+              for f in frames[start_frame:start_frame+n_frames]]
+    frames = torch.stack(frames, 0)
 
-    if not use_estimator:
-        for t in range(start_frame, start_frame+T):
-            target_flow.append(tf(cv2.readOpticalFlow(flow_dir+"frame_{:04d}.flo".format(t+1)))/2)
-        target_flow = torch.stack(target_flow, 0)
-    else:
-        model = load_optical_flow_estimator()
-        target_frames = target_frames.cuda()
-        padder = InputPadder(target_frames.shape)
+    if scale != 1:
+        frames = torchvision.transforms.functional.resize(
+            frames,
+            tuple(int(s*scale) for s in frames.size()[-2:]),
+            antialias=antialias)
 
-        image1, image2 = padder.pad(target_frames[:T], target_frames[1:T+1])
-        _, target_flow = model(image1*255, image2*255, iters=12, test_mode=True)
-        target_flow = padder.unpad(target_flow).detach()
-        del model, padder
-    
-    # load key frame as jpeg
-    key_index = start_frame + int((T/2))
-    dirname = "./results/{}/{}/".format(video_name, tag)
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
-    fname = dirname+"key_frame_{:05d}.jpg".format(key_index)
-    key_frame = PIL.Image.open(video_dir+"frame_{:04d}.png".format(key_index+1))
-    key_frame = key_frame.resize((512,218))
-    key_frame.save(fname, quality=key_frame_quality, subsampling=0)
-    key_frame_size = os.stat(fname).st_size
-    to_tensor = transforms.ToTensor()
-    key_frame = to_tensor(PIL.Image.open(fname))
+    return frames
 
-    return target_frames, target_flow, key_frame, key_frame_size
+
+def load_video_from_video():
+    raise NotImplementedError()
+
+
+def extract_flows(frames):
+    '''
+    extracts backward flows
+    I_{t+1}(x, y) = I_t(x+u, y+v)
+    '''
+    model = load_optical_flow_estimator()
+    padder = InputPadder(frames.shape)
+
+    frames = frames.cuda()
+    image1, image2 = padder.pad(frames[1:], frames[:-1])
+    _, flows = model(image1*255., image2*255., iters=12, test_mode=True)
+    flows = padder.unpad(flows).detach()
+
+    return flows
+
+
+def save_keyframe(keyframe, quality_factor, save_path):
+    '''
+    inputs: keyframe (torch.Tensor or torch.cuda.Tensor)
+            quality_factor (int)
+            save_path (str)
+    outputs: keyframe (encoded and decoded frame)
+             keyframe_size (int)
+    '''
+    if os.path.isdir(save_path):
+        save_path = os.path.join(save_path, 'keyframe.jpeg')
+
+    keyframe = (keyframe * 255).permute(1, 2, 0)
+    keyframe = keyframe.numpy().astype('uint8')
+    keyframe = PIL.Image.fromarray(keyframe)
+    keyframe.save(save_path, quality=quality_factor, subsampling=0)
+    keyframe_nbyte = os.stat(save_path).st_size
+    keyframe = transforms.functional.to_tensor(PIL.Image.open(save_path))
+    os.remove(save_path)
+
+    return keyframe, keyframe_nbyte
 
 
 def show_tensor_to_image(tensor, file_name):
