@@ -94,6 +94,7 @@ def extract_flows(frames):
     image1, image2 = padder.pad(frames[1:], frames[:-1])
     _, flows = model(image1*255., image2*255., iters=12, test_mode=True)
     flows = padder.unpad(flows).detach()
+    flows = flows.permute(0, 2, 3, 1) # to (N, H, W, C)
 
     return flows
 
@@ -120,10 +121,6 @@ def save_keyframe(keyframe, quality_factor, save_path):
     return keyframe, keyframe_size
 
 
-def show_tensor_to_image(tensor, file_name):
-    torchvision.utils.save_image(tensor, './{}.jpg'.format(file_name))
-
-
 # (t,x,y)
 def make_input_grid(T, H, W):
     y = torch.linspace(-1, 1, H)
@@ -142,15 +139,24 @@ def make_flow_grid(H, W):
     return torch.flip(flow_grid, (-1,)) # from (y, x) to (x, y)
 
 
-def apply_flow(flow_grid, pred_flow, H, W, direction='rl'):
-    # making flow grid for grid_sample
-    # (right -> left) or (left -> right)
-    if direction=='rl':
-        flow_grid_shift = flow_grid + pred_flow
-    else:
-        flow_grid_shift = flow_grid - pred_flow
-    flow_grid_shift_x = 2.0 * flow_grid_shift[:, :, :, 0] / (W - 1) - 1.0
-    flow_grid_shift_y = 2.0 * flow_grid_shift[:, :, :, 1] / (H - 1) - 1.0
-    flow_grid_shift = torch.stack((flow_grid_shift_x, flow_grid_shift_y), -1)
-    return flow_grid_shift
+def warp_frames(source_frames, flows, flow_grid):
+    if source_frames.ndim == 3:
+        source_frames = source_frames.unsqueeze(0)
+    if flows.ndim == 3:
+        flows = flows.unsqueeze(0)
+
+    return F.grid_sample(source_frames,
+                         apply_flow(flow_grid, flows, *source_frames.shape[-2:]),
+                         padding_mode='border', align_corners=True)
+
+
+def apply_flow(prev_coords, flow, H=None, W=None, normalize=True):
+    # assume flow_grid and pred_flow are pixel locations
+    next_coords = prev_coords.to(flow.device) + flow
+    if normalize:
+        # normalize to [-1, 1]
+        assert H is not None and W is not None, 'both H,W must not be None'
+        next_coords = 2 * next_coords \
+                    / torch.tensor([[[[W-1, H-1]]]]).to(next_coords.device) - 1 
+    return next_coords
 
