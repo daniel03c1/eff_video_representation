@@ -33,7 +33,6 @@ class Siren(nn.Module):
                                       is_first=False, omega_0=hidden_omega_0))
 
         self.net = nn.Sequential(*self.net)
-        self.flow = flow
 
     def forward(self, coords):
         return self.net(coords)
