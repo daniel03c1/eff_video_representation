@@ -140,9 +140,10 @@ if __name__=='__main__':
                 hidden_layers=args.hidden_layers,
                 out_features=5,
                 outermost_linear=True)
-    net.cuda()
+    net = nn.DataParallel(net.cuda())
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
+
     model_size = sum(p.numel() for p in net.parameters()) * 4
     print(f'total bytes ({model_size+keyframe_size}) = '
           f'model size ({model_size}) + keyframe ({keyframe_size})')
@@ -180,8 +181,9 @@ if __name__=='__main__':
                     dst = src + 1
 
                 outputs = net(input_grid[dst])
-                flows, outputs = outputs[..., :2], outputs[..., 2:]
-                outputs = outputs.permute(2, 0, 1) # residuals
+                flows = outputs[..., :2]
+                outputs = torch.tanh(outputs[..., 2:]) # residuals
+                outputs = outputs.permute(2, 0, 1)
 
                 if i == 0 or i == kf_idx:
                     src_frame = keyframe
@@ -192,6 +194,7 @@ if __name__=='__main__':
                         src_frame = reconstructed_frame.detach()
                 reconstructed_frame = warp_frames(src_frame, flows, flow_grid) \
                                     + outputs.unsqueeze(0)
+                reconstructed_frame = reconstructed_frame.clamp(0, 1)
 
                 # flows and residuals losses
                 flows_loss = F.mse_loss(
@@ -202,7 +205,8 @@ if __name__=='__main__':
                 if epoch <= args.flow_warmup_step:
                     loss = flows_loss + residuals_loss
                 else:
-                    loss = F.mse_loss(reconstructed_frame, target_frames[i])
+                    loss = F.mse_loss(reconstructed_frame,
+                                     target_frames[dst].unsqueeze(0))
                 loss.backward()
 
                 if not is_eval_epoch:
@@ -228,8 +232,9 @@ if __name__=='__main__':
                         dst = src + 1
 
                     outputs = net(input_grid[dst])
-                    flows, outputs = outputs[..., :2], outputs[..., 2:]
-                    outputs = outputs.permute(2, 0, 1).unsqueeze(0) # residuals
+                    flows = outputs[..., :2]
+                    outputs = torch.tanh(outputs[..., 2:]) # residuals
+                    outputs = outputs.permute(2, 0, 1)
 
                     if i == 0 or i == kf_idx:
                         src_frame = keyframe
@@ -237,9 +242,10 @@ if __name__=='__main__':
                         src_frame = reconstructed_frame.detach()
                     reconstructed_frame = warp_frames(
                         src_frame, flows, flow_grid) + outputs
+                    reconstructed_frame = reconstructed_frame.clamp(0, 1)
 
-                    for i in range(n_metrics):
-                        perf_logs[-1][i] += metrics[i](
+                    for j in range(n_metrics):
+                        perf_logs[-1][j] += metrics[j](
                             reconstructed_frame,
                             target_frames[dst].unsqueeze(0)).item() / T
 
