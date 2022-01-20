@@ -1,10 +1,5 @@
 # Neural Residual Flow Fields for Efficient Video Representations ([arxiv](https://arxiv.org/abs/2201.04329))
 
-I'm currently aggregating and refactoring multiple versions of code that haven't been committed to this repository.
-With high probability, errors, such as inconsistent results with the paper, might occur.
-I am planning to fix these errors as soon as possible.
-Thank you.
-
 
 ### 1. Download MPI sintel dataset 
 Download MPI sintel dataset from [here](http://sintel.is.tue.mpg.de/)
@@ -31,7 +26,7 @@ python train_res_flow.py --start_frame=21 --n_frames=7 --tag=alley_1_start21_jq9
 
 Training baseline (SIREN)
 ```bash
-python train_baseline.py --hidden-features=256 --n_frames=28 --lr=0.001 --tag baseline_siren_hf256
+python train_baseline.py --hidden_features=256 --n_frames=28 --lr=0.001 --tag baseline_siren_hf256
 ```
 
 ### 4. Examples
