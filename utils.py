@@ -123,12 +123,14 @@ def save_keyframe(keyframe, quality_factor, save_path):
 
 
 # (t,x,y)
-def make_input_grid(T, H, W):
-    y = torch.linspace(-1, 1, H)
-    x = torch.linspace(-1, 1, W)
-    t = torch.linspace(-1, 1, T)
-    input_grid = torch.stack(torch.meshgrid(t,y,x),-1)
-    input_grid = torch.stack((input_grid[:,:,:,0],input_grid[:,:,:,2], input_grid[:,:,:,1]),-1)
+def make_input_grid(T, H, W, minvalue=-1, maxvalue=1):
+    t = torch.linspace(minvalue, maxvalue, T)
+    y = torch.linspace(minvalue, maxvalue, H)
+    x = torch.linspace(minvalue, maxvalue, W)
+
+    input_grid = torch.stack(torch.meshgrid(t, y, x), -1)
+    input_grid = torch.stack(
+        [input_grid[..., 0], input_grid[..., 2], input_grid[..., 1]], -1)
     return input_grid
 
 
