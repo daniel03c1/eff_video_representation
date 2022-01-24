@@ -26,6 +26,7 @@ parser.add_argument('--hidden_features', type=int, default=96,
                     help='the number of hidden units per layer')
 parser.add_argument('--hidden_layers', type=int, default=3,
                     help='the number of layers (default: 3)')
+parser.add_argument('--qat', action='store_true')
 
 # video
 parser.add_argument('--video_path', type=str, default='./training/final/alley_1',
@@ -139,13 +140,18 @@ if __name__=='__main__':
                 hidden_features=args.hidden_features,
                 hidden_layers=args.hidden_layers,
                 out_features=5,
-                outermost_linear=True)
+                outermost_linear=True,
+                qat=args.qat)
     net = nn.DataParallel(net.cuda())
+
+    if args.qat:
+        net.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+        torch.quantization.prepare(net, inplace=True)
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
 
-    model_size = sum(p.numel() for p in net.parameters()) * 4
-    print(f'total bytes ({model_size+keyframe_size}) = '
+    model_size = sum(p.numel() for p in net.parameters()) * (4 - 3*args.qat)
+    print(f'approx. total bytes ({model_size+keyframe_size}) = '
           f'model size ({model_size}) + keyframe ({keyframe_size})')
 
     """ MISC """
@@ -267,4 +273,12 @@ if __name__=='__main__':
                 np.savetxt(os.path.join(save_path, "logs.csv"),
                            perf_logs, fmt='%0.6f',
                            delimiter=", ", header=header, comments='')
+
+    # end of training
+    if args.qat:
+        net = torch.quantization.convert(net.module.eval(), inplace=False)
+
+    model_path = os.path.join(save_path, f'final.pt')
+    torch.save({'model_state_dict': net.state_dict()}, model_path)
+    print(f'total bytes ({os.stat(model_path).st_size+keyframe_size})')
 

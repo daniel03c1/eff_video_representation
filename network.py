@@ -26,8 +26,8 @@ class Siren(nn.Module):
             final_linear = nn.Linear(hidden_features, out_features)
 
             with torch.no_grad():
-                final_linear.weight.uniform_(-np.sqrt(6/hidden_features) / 32,
-                                              np.sqrt(6/hidden_features) / 32)
+                final_linear.weight.uniform_(-np.sqrt(6/hidden_features) / 128,
+                                              np.sqrt(6/hidden_features) / 128)
 
             self.net.append(final_linear)
         else:
@@ -67,11 +67,11 @@ class SineLayer(nn.Module):
                 self.linear.weight.uniform_(-1 / self.in_features / 2,
                                              1 / self.in_features / 2)
             else:
-                self.linear.weight.uniform_(-np.sqrt(6/self.in_features) / 32,
-                                             np.sqrt(6/self.in_features) / 32)
+                self.linear.weight.uniform_(-np.sqrt(6/self.in_features) / 128,
+                                             np.sqrt(6/self.in_features) / 128)
 
     def forward(self, inputs):
-        return torch.sin(32 * self.linear(inputs))
+        return torch.sin(128 * self.linear(inputs))
 
 
 class NeuralFieldsNetwork(nn.Module):
