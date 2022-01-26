@@ -115,7 +115,7 @@ if __name__=='__main__':
         os.makedirs(save_path)
 
     """ PREPARING A VIDEO """
-    target_frames = load_video_from_images(
+    target_frames = load_video(
         args.video_path, args.start_frame, args.n_frames, args.video_scale)
 
     # keyframe
