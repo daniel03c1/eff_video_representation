@@ -152,16 +152,12 @@ def save_keyframe(keyframe, quality_factor, save_path):
     return keyframe, keyframe_size
 
 
-# (t,x,y)
-def make_input_grid(T, H, W, minvalue=-1, maxvalue=1):
-    t = torch.linspace(minvalue, maxvalue, T)
-    y = torch.linspace(minvalue, maxvalue, H)
-    x = torch.linspace(minvalue, maxvalue, W)
-
-    input_grid = torch.stack(torch.meshgrid(t, y, x), -1)
-    input_grid = torch.stack(
-        [input_grid[..., 0], input_grid[..., 2], input_grid[..., 1]], -1)
-    return input_grid
+def make_input_grid(*input_size, minvalue=-1, maxvalue=1):
+    # generate grid for a given input size
+    # 2D coordinates: use make_input_grid(H, W) -> (H, W, 2) shaped tensor
+    # 3D coordinates: use make_input_grid(T, H, W) -> (T, H, W, 3) shaped tensor
+    return torch.stack(torch.meshgrid(*[torch.linspace(minvalue, maxvalue, S)
+                                        for S in input_size]), -1)
 
 
 # (x,y)
