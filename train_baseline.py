@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tqdm
 
+from embedding import *
 from flow_utils import *
 from metrics import PSNR, SSIM, MSE
 from network import *
@@ -26,6 +27,8 @@ parser.add_argument('--hidden_features', type=int, default=96,
                     help='the number of hidden units per layer')
 parser.add_argument('--hidden_layers', type=int, default=3,
                     help='the number of layers (default: 3)')
+parser.add_argument('--use_amp', action='store_true',
+                    help='use automatic mixed precision (32 to 16 bits)')
 
 # video
 parser.add_argument('--video_path', type=str, default='./training/final/alley_1',
@@ -45,6 +48,7 @@ parser.add_argument('--lr', type=float, default=5e-4,
                     help='learning rate (default: 0.0005)')
 parser.add_argument('--epochs', type=int, default=30000,
                     help='the number of training epochs')
+parser.add_argument('--batch_size', type=int, default=None)
 
 parser.add_argument('--eval_interval', type=int, default=100)
 parser.add_argument('--save_logs_interval', type=int, default=10000)
@@ -63,7 +67,7 @@ if __name__=='__main__':
 
     # grids
     T, _, H, W = target_frames.size()
-    input_grid = make_input_grid(T, H, W)
+    input_grid = make_input_grid(T, H, W, minvalue=0, maxvalue=1)
 
     """ PREPARING A NETWORK """
     net = Siren(in_features=3,
@@ -71,9 +75,12 @@ if __name__=='__main__':
                 hidden_layers=args.hidden_layers,
                 out_features=3,
                 outermost_linear=True)
-    net.cuda()
+    net = nn.DataParallel(net.cuda())
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    if args.use_amp:
+        scaler = torch.cuda.amp.GradScaler()
+
     model_size = sum(p.numel() for p in net.parameters()) * 4
     print(f'total bytes ({model_size}) = model size ({model_size})')
 
@@ -88,10 +95,15 @@ if __name__=='__main__':
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
+    n_samples = T * H * W
+    batch_size = H * W if args.batch_size is None else args.batch_size
+    n_steps = n_samples // batch_size
+    indices_scaler = torch.tensor([T, H, W]) - 1
+
     """ START TRAINING """
+    net.train()
     with tqdm.tqdm(range(args.epochs)) as loop:
         for epoch in loop:
-            net.train()
             optimizer.zero_grad()
 
             is_eval_epoch = (epoch + 1) % args.eval_interval == 0
@@ -99,29 +111,46 @@ if __name__=='__main__':
             if is_eval_epoch:
                 perf_logs.append(np.zeros(n_metrics))
 
-            for i in range(T):
-                outputs = net(input_grid[i])
-                outputs = torch.sigmoid(outputs)
-                outputs = outputs.permute(2, 0, 1) # RGB
-                
-                loss = F.mse_loss(outputs, target_frames[i])
-                loss.backward()
+            for i in range(n_steps):
+                indices = torch.round(torch.rand(batch_size, 3)
+                                      * indices_scaler).long()
+                inputs = input_grid[indices[..., 0], indices[..., 1],
+                                    indices[..., 2]]
+                targets = target_frames[indices[..., 0], :,
+                                        indices[..., 1], indices[..., 2]]
 
-            # update per epoch
-            optimizer.step()
+                if args.use_amp:
+                    with torch.cuda.amp.autocast(enabled=True):
+                        outputs = torch.sigmoid(net(inputs))
+                        loss = F.mse_loss(outputs, targets)
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), 1.)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    outputs = torch.sigmoid(net(inputs))
+                    loss = F.mse_loss(outputs, targets)
+                    loss.backward()
+                    optimizer.step()
 
             if is_eval_epoch:
                 net.eval()
 
                 for i in range(T):
-                    outputs = net(input_grid[i])
-                    outputs = torch.sigmoid(outputs)
+                    if args.use_amp:
+                        with torch.cuda.amp.autocast(enabled=True):
+                            outputs = torch.sigmoid(net(input_grid[i]))
+                    else:
+                        outputs = torch.sigmoid(net(input_grid[i]))
                     outputs = outputs.permute(2, 0, 1).unsqueeze(0) # RGB
 
                     for j in range(n_metrics):
                         perf_logs[-1][j] += metrics[j](
-                            outputs,
+                            outputs.float(),
                             target_frames[i].unsqueeze(0)).item() / T
+
+                net.train()
 
                 postfix = {str(metrics[i]): perf_logs[-1][i]
                            for i in range(n_metrics)} # test performance
