@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 
+from embedding import Embedding
+
 
 class Siren(nn.Module):
     def __init__(self, in_features,
@@ -105,16 +107,16 @@ class NeuralFieldsNetwork(nn.Module):
             self.net.append(torch.quantization.QuantStub())
 
         self.net.extend([nn.Linear(input_embedding.get_output_size()
-                                    if self.use_emb else in_features,
-                                    hidden_features),
-                          activation()])
+                                   if self.use_emb else in_features,
+                                   hidden_features),
+                         activation()])
 
         for i in range(self.n_hidden_layers):
             self.net.extend([nn.Linear(hidden_features, hidden_features),
-                              activation()])
+                             activation()])
 
         self.net.extend([nn.Linear(hidden_features, out_features),
-                          output_activation()])
+                         output_activation()])
 
         if use_qat:
             self.net.append(torch.quantization.DeQuantStub())
@@ -134,4 +136,13 @@ def activation_mapper(activation):
         return activation
     else:
         raise ValueError()
+
+
+class Swish(nn.Module):
+    def __init__(self):
+        super(Swish, self).__init__()
+        self.beta = nn.Parameter(torch.ones(()))
+
+    def forward(self, inputs):
+        return inputs * torch.sigmoid(inputs * self.beta)
 
