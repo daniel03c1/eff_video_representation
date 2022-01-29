@@ -156,8 +156,9 @@ def make_input_grid(*input_size, minvalue=-1, maxvalue=1):
     # generate grid for a given input size
     # 2D coordinates: use make_input_grid(H, W) -> (H, W, 2) shaped tensor
     # 3D coordinates: use make_input_grid(T, H, W) -> (T, H, W, 3) shaped tensor
-    return torch.stack(torch.meshgrid(*[torch.linspace(minvalue, maxvalue, S)
-                                        for S in input_size]), -1)
+    return torch.stack(
+        torch.meshgrid(*[torch.linspace(minvalue, maxvalue, int(S))
+                         for S in input_size]), -1)
 
 
 # (x,y)
