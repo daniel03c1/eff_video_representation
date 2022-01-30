@@ -63,13 +63,15 @@ class PosEncoding(Embedding):
 
 
 class MultiHashEncoding(Embedding):
-    def __init__(self, video, embedding_dim, grid_size=8, n_levels=1):
+    def __init__(self, video, embedding_dim, grid_size=8, n_levels=1,
+                 include_inputs=True, mode='trilinear'):
         super().__init__()
         T, _, H, W = video.size()
         self.volume = torch.tensor([T, H, W])
         self.embedding_dim = embedding_dim
         self.grid_size = grid_size
         self.n_levels = n_levels
+        self.include_inputs = include_inputs
 
         self.n_dim = 3
 
@@ -89,22 +91,36 @@ class MultiHashEncoding(Embedding):
                                    align_corners=True).squeeze(0)
             colors = colors.permute(1, 2, 3, 0) # T, H, W, C
             colors = colors - colors.reshape(-1, 3).mean(dim=(-2,))
-            mat = torch.pca_lowrank(colors.reshape(-1, 3), self.embedding_dim, center=False)[-1]
+            mat = torch.pca_lowrank(colors.reshape(-1, 3),
+                                    self.embedding_dim, center=False)[-1]
             colors = colors @ mat
-            # colors = torch.rand_like(colors) * 2e-4 - 1e-4
+            colors = torch.rand_like(colors) * 2e-4 - 1e-4
             embeddings.append(nn.Parameter(colors))
         self.embeddings = nn.ParameterList(embeddings)
 
-        self.output_size = embedding_dim * n_levels
+        if mode == 'trilinear':
+            self.weights_func = lambda x: x
+        elif mode == 'smooth':
+            self.weights_func = lambda x: torch.square(x) * (3-2*x)
+        else:
+            raise ValueError(f'not implemented mode ({mode})')
+
+        self.output_size = embedding_dim * n_levels \
+                         + self.n_dim * include_inputs
 
     def forward(self, inputs):
         outputs = []
+        if self.include_inputs:
+            outputs.append(inputs)
+
         for i in range(self.n_levels):
             # [0, 1] to [0, size-1]
             coords = inputs * (self.grid_shape[i].to(inputs.device) - 1)
 
-            out = torch.floor(self.offset.to(coords.device) + coords[..., None, :])
-            out = torch.clamp(out, min=torch.zeros(self.n_dim, device=out.device),
+            out = torch.floor(self.offset.to(coords.device)
+                              + coords[..., None, :])
+            out = torch.clamp(out,
+                              min=torch.zeros(self.n_dim, device=out.device),
                               max=self.grid_shape[i].to(out.device) - 1)
 
             values = self.embeddings[i][out[..., 0].long(),
@@ -112,7 +128,7 @@ class MultiHashEncoding(Embedding):
                                         out[..., 2].long()]
 
             weights = 1 - torch.abs(out - coords[..., None, :])
-            # bilinear interpolation (identity)
+            weights = self.weights_func(weights)
             weights = weights.prod(-1, keepdim=True)
 
             out = torch.sum(weights * values, -2)
