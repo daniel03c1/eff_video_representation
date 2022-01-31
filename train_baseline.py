@@ -54,6 +54,20 @@ parser.add_argument('--eval_interval', type=int, default=100)
 parser.add_argument('--save_logs_interval', type=int, default=10000)
 
 
+def apply_weight_decay(net, weight_decay):
+    decay = []
+    no_decay = []
+    for name, param in net.named_parameters():
+        if not param.requires_grad:
+            continue
+        if 'weight' in name or 'bias' in name:
+            decay.append(param)
+        else:
+            no_decay.append(param)
+    return [{'params': no_decay, 'weight_decay': 0.},
+            {'params': decay, 'weight_decay': weight_decay}]
+
+
 if __name__=='__main__':
     args = parser.parse_args()
     torch.manual_seed(args.seed)
@@ -70,18 +84,26 @@ if __name__=='__main__':
     input_grid = make_input_grid(T, H, W, minvalue=0, maxvalue=1)
 
     """ PREPARING A NETWORK """
+    '''
     net = Siren(in_features=3,
                 hidden_features=args.hidden_features,
                 hidden_layers=args.hidden_layers,
                 out_features=3,
                 outermost_linear=True)
-    net = nn.DataParallel(net.cuda())
+    '''
+    net = NeuralFieldsNetwork(3, 3, args.hidden_features, args.hidden_layers,
+                              MultiHashEncoding(target_frames, 6, 16, 1),
+                              Swish) # 'ReLU')
+    # net = nn.DataParallel(net.cuda())
+    net = net.cuda()
 
-    optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    optimizer = optim.Adam(apply_weight_decay(net, 1e-6), betas=(0.9, 0.99),
+                           eps=1e-15, lr=args.lr)
     if args.use_amp:
         scaler = torch.cuda.amp.GradScaler()
-
-    model_size = sum(p.numel() for p in net.parameters()) * 4
+        model_size = sum(p.numel() for p in net.parameters()) * 2
+    else:
+        model_size = sum(p.numel() for p in net.parameters()) * 4
     print(f'total bytes ({model_size}) = model size ({model_size})')
 
     """ MISC """
@@ -125,7 +147,7 @@ if __name__=='__main__':
                         loss = F.mse_loss(outputs, targets)
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), 1.)
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), 0.1)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
@@ -138,11 +160,12 @@ if __name__=='__main__':
                 net.eval()
 
                 for i in range(T):
+                    inputs = input_grid[i]
                     if args.use_amp:
                         with torch.cuda.amp.autocast(enabled=True):
-                            outputs = torch.sigmoid(net(input_grid[i]))
+                            outputs = torch.sigmoid(net(inputs))
                     else:
-                        outputs = torch.sigmoid(net(input_grid[i]))
+                        outputs = torch.sigmoid(net(inputs))
                     outputs = outputs.permute(2, 0, 1).unsqueeze(0) # RGB
 
                     for j in range(n_metrics):
@@ -151,6 +174,9 @@ if __name__=='__main__':
                             target_frames[i].unsqueeze(0)).item() / T
 
                 net.train()
+
+                if perf_logs[-1][0] < 20:
+                    import pdb; pdb.set_trace()
 
                 postfix = {str(metrics[i]): perf_logs[-1][i]
                            for i in range(n_metrics)} # test performance

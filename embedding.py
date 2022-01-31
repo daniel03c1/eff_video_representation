@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils import make_input_grid
-
 
 class Embedding(nn.Module):
     def forward(self, inputs):
@@ -83,6 +81,7 @@ class MultiHashEncoding(Embedding):
 
         embeddings = []
         for i in range(self.n_levels):
+            '''
             grid = torch.flip(make_input_grid(*self.grid_shape[i],
                                               minvalue=-1).unsqueeze(0),
                               (-1,))
@@ -94,7 +93,9 @@ class MultiHashEncoding(Embedding):
             mat = torch.pca_lowrank(colors.reshape(-1, 3),
                                     self.embedding_dim, center=False)[-1]
             colors = colors @ mat
-            colors = torch.rand_like(colors) * 2e-4 - 1e-4
+            '''
+            colors = torch.rand(tuple([*self.grid_shape[i].int()]
+                                      + [self.embedding_dim])) * 2e-4 - 1e-4
             embeddings.append(nn.Parameter(colors))
         self.embeddings = nn.ParameterList(embeddings)
 
@@ -113,19 +114,87 @@ class MultiHashEncoding(Embedding):
         if self.include_inputs:
             outputs.append(inputs)
 
+        if self.offset.device != inputs.device:
+            self.offset = self.offset.to(inputs.device)
+            for i in range(self.n_levels):
+                self.grid_shape[i] = self.grid_shape[i].to(inputs.device)
+
         for i in range(self.n_levels):
             # [0, 1] to [0, size-1]
-            coords = inputs * (self.grid_shape[i].to(inputs.device) - 1)
+            coords = inputs * (self.grid_shape[i] - 1)
 
-            out = torch.floor(self.offset.to(coords.device)
-                              + coords[..., None, :])
+            out = torch.floor(self.offset + coords[..., None, :])
             out = torch.clamp(out,
                               min=torch.zeros(self.n_dim, device=out.device),
-                              max=self.grid_shape[i].to(out.device) - 1)
+                              max=self.grid_shape[i] - 1)
 
-            values = self.embeddings[i][out[..., 0].long(),
-                                        out[..., 1].long(),
-                                        out[..., 2].long()]
+            out_idx = out.long()
+            values = self.embeddings[i][out_idx[..., 0],
+                                        out_idx[..., 1],
+                                        out_idx[..., 2]]
+
+            weights = 1 - torch.abs(out - coords[..., None, :])
+            weights = self.weights_func(weights)
+            weights = weights.prod(-1, keepdim=True)
+
+            out = torch.sum(weights * values, -2)
+
+            outputs.append(out)
+
+        return torch.cat(outputs, -1)
+
+    def get_output_size(self):
+        return self.output_size
+
+
+class TestEmbedding(Embedding):
+    def __init__(self, volume, embedding_dim, grid_size=8,
+                 include_inputs=True, mode='trilinear'):
+        super().__init__()
+        T, H, W = volume
+        self.volume = torch.tensor(volume) # [T, H, W]
+        self.embedding_dim = embedding_dim
+        self.grid_size = grid_size
+        self.include_inputs = include_inputs
+
+        # [X, Y, Z, X+Y, Y+Z, X+Z, X-Y, Y-Z, Z-X] # , X+Y+Z, X+Y-Z, X-Y+Z, X-Y-Z]
+        self.grid_shape = torch.ceil(torch.tensor([T, H, W, T+H, T+W, H+W, T+H, T+W, H+W]) / self.grid_size) + 1
+        self.embeddings = nn.Parameter(
+            torch.rand([torch.sum(self.grid_shape), self.embedding_dim]) * 2e-4 - 1e-4)
+
+        if mode == 'trilinear':
+            self.weights_func = lambda x: x
+        elif mode == 'smooth':
+            self.weights_func = lambda x: torch.square(x) * (3-2*x)
+        else:
+            raise ValueError(f'not implemented mode ({mode})')
+
+        self.output_size = embedding_dim * 9 + self.n_dim * include_inputs
+
+    def forward(self, inputs):
+        outputs = []
+        if self.include_inputs:
+            outputs.append(inputs)
+
+        if self.embeddings.device != inputs.device:
+            self.embeddings = self.embeddings.to(inputs.device)
+
+        # X, Y, Z
+        
+
+        for i in range(self.n_levels):
+            # [0, 1] to [0, size-1]
+            coords = inputs * (self.grid_shape[i] - 1)
+
+            out = torch.floor(self.offset + coords[..., None, :])
+            out = torch.clamp(out,
+                              min=torch.zeros(self.n_dim, device=out.device),
+                              max=self.grid_shape[i] - 1)
+
+            out_idx = out.long()
+            values = self.embeddings[i][out_idx[..., 0],
+                                        out_idx[..., 1],
+                                        out_idx[..., 2]]
 
             weights = 1 - torch.abs(out - coords[..., None, :])
             weights = self.weights_func(weights)
