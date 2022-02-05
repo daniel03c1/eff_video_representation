@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tqdm
 
+from embedding import *
 from flow_utils import *
 from metrics import PSNR, SSIM, MSE
 from network import *
@@ -26,7 +27,8 @@ parser.add_argument('--hidden_features', type=int, default=96,
                     help='the number of hidden units per layer')
 parser.add_argument('--hidden_layers', type=int, default=3,
                     help='the number of layers (default: 3)')
-parser.add_argument('--qat', action='store_true')
+parser.add_argument('--use_amp', action='store_true',
+                    help='use automatic mixed precision (32 to 16 bits)')
 
 # video
 parser.add_argument('--video_path', type=str, default='./training/final/alley_1',
@@ -104,6 +106,28 @@ def visualize():
     raise NotImplementedError()
 
 
+def apply_weight_decay(net, weight_decay):
+    decay = []
+    no_decay = []
+    for name, param in net.named_parameters():
+        if not param.requires_grad:
+            continue
+        if 'weight' in name or 'bias' in name:
+            decay.append(param)
+        else:
+            no_decay.append(param)
+    return [{'params': no_decay, 'weight_decay': 0.},
+            {'params': decay, 'weight_decay': weight_decay}]
+
+
+class EmptyContext:
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args, **kwargs):
+        pass
+
+
 if __name__=='__main__':
     args = parser.parse_args()
     torch.manual_seed(args.seed)
@@ -140,17 +164,22 @@ if __name__=='__main__':
                 hidden_features=args.hidden_features,
                 hidden_layers=args.hidden_layers,
                 out_features=5,
-                outermost_linear=True,
-                qat=args.qat)
+                outermost_linear=True)
+    '''
+    net = NeuralFieldsNetwork(3, 3, args.hidden_features, args.hidden_layers,
+                              MultiHashEncoding(target_frames, 4, torch.tensor([2, 8, 8]), 4),
+                              # TestEmbedding((T, H, W), 32, 2),
+                              'ReLU') # Swish)
+    '''
     net = nn.DataParallel(net.cuda())
 
-    if args.qat:
-        net.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-        torch.quantization.prepare(net, inplace=True)
+    # optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    optimizer = optim.Adam(apply_weight_decay(net, 1e-6), betas=(0.9, 0.99),
+                           eps=1e-15, lr=args.lr)
+    if args.use_amp:
+        scaler = torch.cuda.amp.GradScaler()
 
-    optimizer = optim.Adam(net.parameters(), lr=args.lr)
-
-    model_size = sum(p.numel() for p in net.parameters()) * (4 - 3*args.qat)
+    model_size = sum(p.numel() for p in net.parameters()) * (4 - 2*args.use_amp)
     print(f'approx. total bytes ({model_size+keyframe_size}) = '
           f'model size ({model_size}) + keyframe ({keyframe_size})')
 
@@ -162,13 +191,18 @@ if __name__=='__main__':
                        + ['MSE(flows)', 'MSE(residuals)'])
     perf_logs = []
     default_perfs = np.array(
-        [m(keyframe.unsqueeze(0), target_frames[kf_idx].unsqueeze(0)) / T
+        [m(keyframe.unsqueeze(0), target_frames[kf_idx].unsqueeze(0)).cpu() / T
          for m in metrics])
 
+    if args.use_amp:
+        context = lambda : torch.cuda.amp.autocast(enabled=True)
+    else:
+        context = EmptyContext
+
     """ START TRAINING """
+    net.train()
     with tqdm.tqdm(range(args.epochs)) as loop:
         for epoch in loop:
-            net.train()
             optimizer.zero_grad()
 
             is_eval_epoch = (epoch + 1) % args.eval_interval == 0
@@ -186,11 +220,6 @@ if __name__=='__main__':
                     src = i
                     dst = src + 1
 
-                outputs = net(input_grid[dst])
-                flows = outputs[..., :2]
-                outputs = torch.tanh(outputs[..., 2:]) # residuals
-                outputs = outputs.permute(2, 0, 1)
-
                 if i == 0 or i == kf_idx:
                     src_frame = keyframe
                 else:
@@ -198,22 +227,34 @@ if __name__=='__main__':
                         src_frame = target_frames[src]
                     else:
                         src_frame = reconstructed_frame.detach()
-                reconstructed_frame = warp_frames(src_frame, flows, flow_grid) \
-                                    + outputs.unsqueeze(0)
-                reconstructed_frame = reconstructed_frame.clamp(0, 1)
 
-                # flows and residuals losses
-                flows_loss = F.mse_loss(
-                    flows, target_flows[dst - (not backward)])
-                residuals_loss = F.mse_loss(
-                    outputs, target_residuals[dst - (not backward)])
+                with context():
+                    outputs = net(input_grid[dst])
+                    flows = outputs[..., :2]
+                    outputs = torch.tanh(outputs[..., 2:]) # residuals
+                    outputs = outputs.permute(2, 0, 1)
 
-                if epoch <= args.flow_warmup_step:
-                    loss = flows_loss + residuals_loss
-                else:
-                    loss = F.mse_loss(reconstructed_frame,
-                                     target_frames[dst].unsqueeze(0))
-                loss.backward()
+                    reconstructed_frame = warp_frames(src_frame, flows,
+                                                      flow_grid) \
+                                        + outputs.unsqueeze(0)
+                    reconstructed_frame = reconstructed_frame.clamp(0, 1)
+
+                    # flows and residuals losses
+                    flows_loss = F.mse_loss(
+                        flows, target_flows[dst - (not backward)])
+                    residuals_loss = F.mse_loss(
+                        outputs, target_residuals[dst - (not backward)])
+
+                    if epoch <= args.flow_warmup_step:
+                        loss = flows_loss + residuals_loss
+                    else:
+                        loss = F.mse_loss(reconstructed_frame,
+                                         target_frames[dst].unsqueeze(0))
+
+                    if args.use_amp:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
 
                 if not is_eval_epoch:
                     continue
@@ -223,7 +264,13 @@ if __name__=='__main__':
                 perf_logs[-1][-1] += residuals_loss.item() / T
 
             # update per epoch
-            optimizer.step()
+            if args.use_amp:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(net.parameters(), 0.1)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
 
             if is_eval_epoch:
                 net.eval()
@@ -237,23 +284,27 @@ if __name__=='__main__':
                         src = i
                         dst = src + 1
 
-                    outputs = net(input_grid[dst])
-                    flows = outputs[..., :2]
-                    outputs = torch.tanh(outputs[..., 2:]) # residuals
-                    outputs = outputs.permute(2, 0, 1)
-
                     if i == 0 or i == kf_idx:
                         src_frame = keyframe
                     else:
                         src_frame = reconstructed_frame.detach()
-                    reconstructed_frame = warp_frames(
-                        src_frame, flows, flow_grid) + outputs
-                    reconstructed_frame = reconstructed_frame.clamp(0, 1)
+
+                    with context():
+                        outputs = net(input_grid[dst])
+                        flows = outputs[..., :2]
+                        outputs = torch.tanh(outputs[..., 2:]) # residuals
+                        outputs = outputs.permute(2, 0, 1)
+
+                        reconstructed_frame = warp_frames(
+                            src_frame, flows, flow_grid) + outputs
+                        reconstructed_frame = reconstructed_frame.clamp(0, 1)
 
                     for j in range(n_metrics):
                         perf_logs[-1][j] += metrics[j](
-                            reconstructed_frame,
+                            reconstructed_frame.float(),
                             target_frames[dst].unsqueeze(0)).item() / T
+
+                net.train()
 
                 postfix = {str(metrics[i]): perf_logs[-1][i]
                            for i in range(n_metrics)} # test performance
@@ -273,12 +324,4 @@ if __name__=='__main__':
                 np.savetxt(os.path.join(save_path, "logs.csv"),
                            perf_logs, fmt='%0.6f',
                            delimiter=", ", header=header, comments='')
-
-    # end of training
-    if args.qat:
-        net = torch.quantization.convert(net.module.eval(), inplace=False)
-
-    model_path = os.path.join(save_path, f'final.pt')
-    torch.save({'model_state_dict': net.state_dict()}, model_path)
-    print(f'total bytes ({os.stat(model_path).st_size+keyframe_size})')
 
