@@ -83,13 +83,14 @@ class NeuralFieldsNetwork(nn.Module):
                  input_embedding=None,
                  activation='ReLU',
                  output_activation=None,
-                 use_qat=False):
+                 reuse=1):
         super(NeuralFieldsNetwork, self).__init__()
 
         self.in_features = in_features
         self.out_features = out_features
         self.hidden_features = hidden_features
         self.n_hidden_layers = n_hidden_layers
+        self.reuse = reuse
 
         activation = activation_mapper(activation)
         output_activation = activation_mapper(output_activation)
@@ -97,17 +98,13 @@ class NeuralFieldsNetwork(nn.Module):
         self.net = []
 
         self.use_emb = input_embedding is not None
-        self.use_qat = use_qat
 
         if self.use_emb:
             assert isinstance(input_embedding, Embedding)
             self.net.append(input_embedding)
 
-        if use_qat:
-            self.net.append(torch.quantization.QuantStub())
-
         self.net.extend([nn.Linear(input_embedding.get_output_size()
-                                   if self.use_emb else in_features,
+                                   if self.use_emb else self.in_features,
                                    hidden_features),
                          activation()])
 
@@ -118,13 +115,21 @@ class NeuralFieldsNetwork(nn.Module):
         self.net.extend([nn.Linear(hidden_features, out_features),
                          output_activation()])
 
-        if use_qat:
-            self.net.append(torch.quantization.DeQuantStub())
-
-        self.net = nn.Sequential(*self.net)
+        self.net = nn.ModuleList(self.net)
 
     def forward(self, inputs):
-        return self.net(inputs)
+        outputs = inputs
+        for i in range(2 + self.use_emb):
+            outputs = self.net[i](outputs)
+
+        for i in range(self.reuse):
+            for j, n in enumerate(self.net[2+self.use_emb:-2]):
+                outputs = n(outputs)
+
+        for n in self.net[-2:]:
+            outputs = n(outputs)
+
+        return outputs
 
 
 def activation_mapper(activation):
@@ -139,10 +144,15 @@ def activation_mapper(activation):
 
 
 class Swish(nn.Module):
-    def __init__(self):
+    def __init__(self, bias=False):
         super(Swish, self).__init__()
         self.beta = nn.Parameter(torch.ones(()))
 
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(()))
+        else:
+            self.bias = 0
+
     def forward(self, inputs):
-        return inputs * torch.sigmoid(inputs * self.beta)
+        return inputs * torch.sigmoid(inputs * self.beta + self.bias)
 

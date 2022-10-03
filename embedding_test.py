@@ -33,6 +33,26 @@ class EmbeddingTest(unittest.TestCase):
         self.assertEqual(emb(torch.ones(32, in_features)).size(),
                          (32, in_features*2*n_freqs))
 
+    def test_multi_hash_encoding(self):
+        in_features, embedding_dim, n_levels = 3, 2, 3
+        video = torch.rand(16, in_features, 90, 160)
+
+        emb = MultiHashEncoding(video, embedding_dim, n_levels=n_levels)
+        out_size = embedding_dim * n_levels
+        self.assertEqual(emb.get_output_size(), out_size)
+        self.assertEqual(emb(torch.rand(48, 32, in_features)).size(),
+                         (48, 32, out_size))
+
+    def test_test_encoding(self):
+        in_features, embedding_dim = 3, 7
+        volume = (16, 90, 160)
+
+        emb = TestEmbedding(volume, embedding_dim)
+        out_size = embedding_dim * 3
+        self.assertEqual(emb.get_output_size(), out_size)
+        self.assertEqual(emb(torch.rand(48, 32, in_features)).size(),
+                         (48, 32, out_size))
+
 
 if __name__ == '__main__':
     unittest.main()
