@@ -107,7 +107,7 @@ def main(args, target_frames, keyframes, kf_size, kf_idx, metrics,
         x = Symbol('x')
         eq = args.hidden_layers * x**2 \
            + x*(10 + encoding.get_output_size() + args.hidden_layers) \
-           - args.ratio * kf_size / (2 * (1 + args.split))
+           - args.ratio * kf_size / ((4 - 2*args.use_amp) * (1 + args.split))
         width = int(np.round(float(max(solve(eq)))/2)*2)
 
         if not args.split:
