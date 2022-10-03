@@ -47,6 +47,8 @@ parser.add_argument('--lr', type=float, default=1e-3,
                     help='learning rate')
 parser.add_argument('--epochs', type=int, default=5000,
                     help='the number of training epochs')
+parser.add_argument('--batch_size', type=int, default=5)
+parser.add_argument('--grad_clip', type=float, default=0.1)
 
 parser.add_argument('--eval_interval', type=int, default=None)
 parser.add_argument('--verbose', action='store_true')
@@ -116,15 +118,16 @@ def main(args, target_frames, metrics,
             if is_eval_epoch:
                 perf_logs.append(np.zeros(n_metrics))
 
-            for i in np.random.permutation(range(T)):
+            for i in torch.randperm(T).cuda().split(args.batch_size):
                 with context():
-                    i_grid = input_grid[i] # [H, W, 3]
-                    target = target_frames[i].unsqueeze(0)
+                    i_grid = torch.index_select(input_grid, 0, i)
+                    targets = torch.index_select(target_frames, 0, i)
 
                     outputs = net(i_grid)
-                    outputs = outputs.permute(2, 0, 1).unsqueeze(0)
+                    outputs = outputs.permute(0, 3, 1, 2)
 
-                    loss = F.mse_loss(outputs, target)
+                    loss = F.mse_loss(outputs, targets) \
+                         * outputs.size(0) / args.batch_size
 
                     if args.use_amp:
                         scaler.scale(loss).backward()
@@ -134,7 +137,8 @@ def main(args, target_frames, metrics,
             # update
             if args.use_amp:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(net.parameters(), 0.1)
+                torch.nn.utils.clip_grad_norm_(net.parameters(),
+                                               args.grad_clip)
                 scaler.step(optimizer)
                 scaler.update()
             else:
