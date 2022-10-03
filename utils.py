@@ -36,7 +36,7 @@ def load_optical_flow_estimator(checkpoint='GMA/checkpoints/gma-sintel.pth'):
 def load_video(path, *args, **kwargs):
     if os.path.isdir(path):
         return load_video_from_images(path, *args, **kwargs)
-    elif os.path.splitext(path)[1].lower() in ['.avi']:
+    elif os.path.splitext(path)[1].lower() in ['.avi', '.mp4']:
         return load_video_from_video(path, *args, **kwargs)
     else:
         raise ValueError('Path must be one of a directory containing '
@@ -69,7 +69,7 @@ def load_video_from_video(video_path, start_frame=None, n_frames=None,
                           scale=1., antialias=False):
     name, ext = os.path.splitext(video_path)
 
-    assert ext.lower() == '.avi', 'currently only AVI format is supported'
+    # assert ext.lower() == '.avi', 'currently only AVI format is supported'
 
     frames = skvideo.io.vread(f'{name}{ext}')
     if start_frame is None:
@@ -130,10 +130,10 @@ class InputPadder:
         return x[..., c[0]:c[1], c[2]:c[3]]
 
 
-def save_keyframe(keyframe, quality_factor, save_path):
+def save_keyframe(keyframe, quality, save_path, codec='jpeg'):
     '''
     inputs: keyframe (torch.Tensor or torch.cuda.Tensor)
-            quality_factor (int)
+            quality (int)
             save_path (str)
     outputs: keyframe (encoded and decoded frame)
              keyframe_size (int)
@@ -144,10 +144,40 @@ def save_keyframe(keyframe, quality_factor, save_path):
     keyframe = (keyframe * 255).permute(1, 2, 0)
     keyframe = keyframe.numpy().astype('uint8')
     keyframe = PIL.Image.fromarray(keyframe)
-    keyframe.save(save_path, quality=quality_factor, subsampling=0)
+
+    if codec == 'jpeg':
+        save_path = f'{os.path.splitext(save_path)[0]}.jpeg'
+        keyframe.save(save_path, quality=quality, subsampling=0)
+    elif codec == 'avif':
+        import pillow_avif
+        save_path = f'{os.path.splitext(save_path)[0]}.png'
+        keyframe.save(save_path)
+        os.system(f'avifenc --min 0 --max 63 -a end-usage=q -a '
+                  f'cq-level={quality} -a tune=ssim {save_path} '
+                  f'{save_path.replace(".png", ".avif")}')
+        os.remove(save_path)
+        save_path = save_path.replace('.png', '.avif')
+    elif codec == 'h264':
+        save_path = f'{os.path.splitext(save_path)[0]}.png'
+        keyframe.save(save_path)
+        new_path = save_path.replace('.png', '.mp4')
+        if os.path.exists(new_path):
+            os.remove(new_path)
+
+        os.system(f'ffmpeg -hide_banner -loglevel error '
+                  f'-i {save_path} -vcodec libx264 '
+                  f'-crf {quality} {new_path}')
+        os.remove(save_path)
+        save_path = new_path
+    else:
+        raise ValueError(f'unsupported codec: {codec}')
     keyframe_size = os.stat(save_path).st_size
-    keyframe = transforms.functional.to_tensor(PIL.Image.open(save_path))
-    os.remove(save_path)
+
+    if codec not in ['h264']:
+        keyframe = transforms.functional.to_tensor(
+            PIL.Image.open(save_path))
+    else:
+        keyframe = load_video(save_path)[0]
 
     return keyframe, keyframe_size
 
@@ -177,7 +207,8 @@ def warp_frames(source_frames, flows, flow_grid):
 
     return F.grid_sample(source_frames,
                          apply_flow(flow_grid, flows, *source_frames.shape[-2:]),
-                         padding_mode='border', align_corners=True)
+                         'bicubic',
+                         padding_mode='reflection', align_corners=True)
 
 
 def apply_flow(prev_coords, flow, H=None, W=None, normalize=True):

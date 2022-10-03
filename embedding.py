@@ -28,7 +28,8 @@ class RFF(Embedding):
 
 
 class PosEncoding(Embedding):
-    def __init__(self, in_features, n_freqs, include_inputs=False):
+    def __init__(self, in_features, n_freqs, include_inputs=False,
+                 trainable=False):
         super().__init__()
         self.in_features = in_features
 
@@ -41,7 +42,7 @@ class PosEncoding(Embedding):
             torch.cat([torch.stack([eye[i] * (2**j)
                                     for j in range(self.n_freqs[i])], -1)
                        for i in range(in_features)], -1),
-            requires_grad=False)
+            requires_grad=trainable)
 
         self.include_inputs = include_inputs
         self.output_size = in_features * include_inputs + 2 * sum(self.n_freqs)
@@ -62,7 +63,7 @@ class PosEncoding(Embedding):
 
 class MultiHashEncoding(Embedding):
     def __init__(self, video, embedding_dim, grid_size=8, n_levels=1,
-                 include_inputs=True, mode='trilinear'):
+                 include_inputs=False, mode='linear'):
         super().__init__()
         T, _, H, W = video.size()
         self.volume = torch.tensor([T, H, W])
@@ -81,25 +82,12 @@ class MultiHashEncoding(Embedding):
 
         embeddings = []
         for i in range(self.n_levels):
-            '''
-            grid = torch.flip(make_input_grid(*self.grid_shape[i],
-                                              minvalue=-1).unsqueeze(0),
-                              (-1,))
-            colors = F.grid_sample(video.permute(1, 0, 2, 3).unsqueeze(0),
-                                   grid, padding_mode='reflection',
-                                   align_corners=True).squeeze(0)
-            colors = colors.permute(1, 2, 3, 0) # T, H, W, C
-            colors = colors - colors.reshape(-1, 3).mean(dim=(-2,))
-            mat = torch.pca_lowrank(colors.reshape(-1, 3),
-                                    self.embedding_dim, center=False)[-1]
-            colors = colors @ mat
-            '''
             colors = torch.rand(tuple([*self.grid_shape[i].int()]
                                       + [self.embedding_dim])) * 2e-4 - 1e-4
             embeddings.append(nn.Parameter(colors))
         self.embeddings = nn.ParameterList(embeddings)
 
-        if mode == 'trilinear':
+        if mode == 'linear':
             self.weights_func = lambda x: x
         elif mode == 'smooth':
             self.weights_func = lambda x: torch.square(x) * (3-2*x)
@@ -149,7 +137,7 @@ class MultiHashEncoding(Embedding):
 
 class TestEmbedding(Embedding):
     def __init__(self, volume, embedding_dim, grid_size=8,
-                 include_inputs=True, mode='trilinear'):
+                 include_inputs=False, mode='linear'):
         super().__init__()
         T, H, W = volume
         self.volume = torch.tensor(volume) # [T, H, W]
@@ -158,18 +146,23 @@ class TestEmbedding(Embedding):
         self.include_inputs = include_inputs
 
         # [X, Y, Z, X+Y, Y+Z, X+Z, X-Y, Y-Z, Z-X] # , X+Y+Z, X+Y-Z, X-Y+Z, X-Y-Z]
-        self.grid_shape = torch.ceil(torch.tensor([T, H, W, T+H, T+W, H+W, T+H, T+W, H+W]) / self.grid_size) + 1
+        # self.grid_shape = torch.ceil(torch.tensor([T, H, W, T+H, T+W, H+W, T+H, T+W, H+W]) / self.grid_size) + 1
+        # [X, Y, Z]
+        self.grid_shape = torch.ceil(torch.tensor([T, H, W]) / self.grid_size) \
+                        + 1
+        self.offset = torch.cumsum(torch.tensor([0, *self.grid_shape[:-1]]), -1)
         self.embeddings = nn.Parameter(
-            torch.rand([torch.sum(self.grid_shape), self.embedding_dim]) * 2e-4 - 1e-4)
+            torch.rand((int(sum(self.grid_shape)), self.embedding_dim)) * 2e-4
+            - 1e-4)
 
-        if mode == 'trilinear':
+        if mode == 'linear':
             self.weights_func = lambda x: x
         elif mode == 'smooth':
             self.weights_func = lambda x: torch.square(x) * (3-2*x)
         else:
             raise ValueError(f'not implemented mode ({mode})')
 
-        self.output_size = embedding_dim * 9 + self.n_dim * include_inputs
+        self.output_size = embedding_dim * 3 + 3 * include_inputs
 
     def forward(self, inputs):
         outputs = []
@@ -178,34 +171,39 @@ class TestEmbedding(Embedding):
 
         if self.embeddings.device != inputs.device:
             self.embeddings = self.embeddings.to(inputs.device)
+        if self.grid_shape.device != inputs.device:
+            self.grid_shape = self.grid_shape.to(inputs.device)
+        if self.offset.device != inputs.device:
+            self.offset = self.offset.to(inputs.device)
 
         # X, Y, Z
-        
+        coords = inputs * (self.grid_shape - 1)
+        coords = coords + self.offset
 
-        for i in range(self.n_levels):
-            # [0, 1] to [0, size-1]
-            coords = inputs * (self.grid_shape[i] - 1)
+        out = torch.floor(torch.tensor([[0], [1]]) + coords[..., None, :])
+        out = self.clamp(out)
 
-            out = torch.floor(self.offset + coords[..., None, :])
-            out = torch.clamp(out,
-                              min=torch.zeros(self.n_dim, device=out.device),
-                              max=self.grid_shape[i] - 1)
+        values = self.embeddings[out.long()]
 
-            out_idx = out.long()
-            values = self.embeddings[i][out_idx[..., 0],
-                                        out_idx[..., 1],
-                                        out_idx[..., 2]]
+        weights = 1 - torch.abs(out - coords[..., None, :])
+        weights = self.weights_func(weights)
 
-            weights = 1 - torch.abs(out - coords[..., None, :])
-            weights = self.weights_func(weights)
-            weights = weights.prod(-1, keepdim=True)
-
-            out = torch.sum(weights * values, -2)
-
-            outputs.append(out)
+        out = torch.sum(weights.unsqueeze(-1) * values, -3)
+        out = out.reshape(*out.shape[:-2], -1)
+        outputs.append(out)
 
         return torch.cat(outputs, -1)
 
     def get_output_size(self):
         return self.output_size
+
+    def clamp(self, inputs):
+        if inputs.device != self.offset.device:
+            self.offset = self.offset.to(inputs.device)
+        if inputs.device != self.grid_shape.device:
+            self.grid_shape = self.grid_shape.to(inputs.device)
+
+        return torch.clamp(inputs,
+                           min=self.offset,
+                           max=torch.cumsum(self.grid_shape, -1) - 1)
 
