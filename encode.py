@@ -313,15 +313,16 @@ def main(args, target_frames, keyframes, kf_size, kf_idx, metrics,
 
 if __name__ == '__main__':
     args = parser.parse_args()
+
+    if args.eval_interval is None:
+        args.eval_interval = args.epochs
+
     print('configs')
     print(str(vars(args)))
 
     save_path = os.path.join(args.save_path, args.tag)
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-
-    if args.eval_interval is None:
-        args.eval_interval = args.epochs
 
     """ PREPARING A VIDEO """
     target_frames = load_video(args.video, scale=args.video_scale)
