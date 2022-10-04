@@ -8,6 +8,8 @@ There are two main files.
 One is "encode_baseline.py," which compresses a video using color-based INR.
 Another is "encode.py," which compresses a video using NRFF and multiple reference frames.
 
+<img width="1284" alt="multi_main" src="https://user-images.githubusercontent.com/48237485/193852294-8f77e958-5553-415f-9ac6-8689e4629185.png">
+
 ### 1. Preparation
 You can download video files from the following urls: [MPI SINTEL](http://sintel.is.tue.mpg.de/), [UVG](http://ultravideo.fi/#testsequences).
 
